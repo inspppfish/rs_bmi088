@@ -324,6 +324,7 @@ dependencies = [
  "panic-halt",
  "panic-probe",
  "stm32f4xx-hal",
+ "systick-monotonic",
 ]
 
 [[package]]
@@ -586,6 +587,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "systick-monotonic"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57e71d8e4587d8f434b88b9aef901987f46164df813a3a1d6bdf3a58debf67f0"
+dependencies = [
+ "cortex-m",
+ "fugit",
+ "rtic-monotonic",
 ]
 
 [[package]]
