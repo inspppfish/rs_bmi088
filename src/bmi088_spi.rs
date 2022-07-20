@@ -88,6 +88,7 @@ impl Bmi088 {
             };
         }
 
+        defmt::println!("{}", self.acc_read_single_reg(0x58).unwrap());
         let res = self.acc_read_single_reg(0x00).unwrap();
         defmt::println!("BMI088 init success!");
         Ok(())

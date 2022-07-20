@@ -15,7 +15,7 @@ mod bmi088_spi;
 
 use stm32f4xx_hal::gpio::*;
 
-#[rtic::app(device = stm32f4xx_hal::pac, peripherals = true)]
+#[rtic::app(device = stm32f4xx_hal::pac, peripherals = true, dispatchers = [TIM3])]
 mod app{
     use defmt::println;
     use systick_monotonic::fugit::Duration;
@@ -24,12 +24,14 @@ mod app{
     use super::*;
 
     #[shared]
-    struct Shared{}
+    struct Shared{
+        counter: u32,
+    }
 
     #[local]
     struct Local{
         imu: Bmi088,
-        button: PA0<Input>,
+        int_acc: PC4<Input>,
     }
 
     #[monotonic(binds = SysTick, default = true)]
@@ -48,6 +50,7 @@ mod app{
 
         let gpioa = dp.GPIOA.split();
         let gpiob = dp.GPIOB.split();
+        let gpioc = dp.GPIOC.split();
         let sck = gpiob.pb3.into_alternate();
         let miso = gpiob.pb4.into_alternate();
         let mosi = gpioa.pa7.into_alternate();
@@ -58,35 +61,47 @@ mod app{
         imu.init().unwrap();
 
 
-        let mut button = gpioa.pa0.into_pull_up_input();
-        button.enable_interrupt(&mut dp.EXTI);
-        button.trigger_on_edge(&mut dp.EXTI, Edge::Falling);
+        let mut int_acc = gpioc.pc4.into_pull_up_input();
+        int_acc.enable_interrupt(&mut dp.EXTI);
+        int_acc.trigger_on_edge(&mut dp.EXTI, Edge::Falling);
 
         let mono = Systick::new(cx.core.SYST, 48_000_000);
         keep_watch::spawn_after(Duration::<u64, 1, 1000>::from_ticks(1000)).unwrap();
+        show_fps::spawn_after(Duration::<u64, 1, 1000>::from_ticks(1000)).unwrap();
 
 
         (
-            Shared{},
+            Shared{
+                counter: 0,
+            },
             Local{
-                button,
+                int_acc,
                 imu,
             },
             init::Monotonics(mono),
         )
     }
 
-    #[task(local = [button, imu])]
-    fn keep_watch(cx: keep_watch::Context) {
-        cx.local.button.clear_interrupt_pending_bit();
+    #[task( local = [int_acc, imu], shared = [counter])]
+    fn keep_watch(mut cx: keep_watch::Context) {
+        cx.local.int_acc.clear_interrupt_pending_bit();
         let imu:&mut Bmi088 = cx.local.imu;
 
         imu.enable_acc().unwrap();
-        let mut send_msg: [u8; 4] = [0x16|0x80, 0x17|0x80, 0x55, 0x55];
+        let mut send_msg: [u8; 8] = [0x12|0x80, 0x13|0x80, 0x14|0x80, 0x15|0x80, 0x16|0x80, 0x17|0x80, 0x55, 0x55];
         let res = imu.spi.transfer(send_msg.as_mut_slice()).unwrap();
-        println!("{}", res);
+        cx.shared.counter.lock(|counter| {
+            *counter = *counter + 1;
+        });
         imu.silence().unwrap();
-        keep_watch::spawn_after(Duration::<u64, 1, 1000>::from_ticks(1000)).unwrap();
+        keep_watch::spawn_after(Duration::<u64, 1, 1000>::from_ticks(5)).unwrap();
+    }
+
+    #[task(shared = [counter])]
+    fn show_fps(mut cx: show_fps::Context) {
+        defmt::println!("{}", cx.shared.counter.lock(|counter|{*counter}));
+        cx.shared.counter.lock(|counter|{*counter = 0});
+        show_fps::spawn_after(Duration::<u64, 1, 1000>::from_ticks(1000)).unwrap();
     }
 }
 
