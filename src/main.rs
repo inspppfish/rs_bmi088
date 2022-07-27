@@ -12,26 +12,34 @@ use hal::{
 };
 
 mod bmi088_spi;
+mod sensor;
+mod math;
+mod futaba_sbus;
 
 use stm32f4xx_hal::gpio::*;
 
 #[rtic::app(device = stm32f4xx_hal::pac, peripherals = true, dispatchers = [TIM3])]
 mod app{
-    use defmt::println;
+    use stm32f4xx_hal::pac::{ USART3};
+    use stm32f4xx_hal::serial::{Rx, Serial};
     use systick_monotonic::fugit::Duration;
     use crate::bmi088_spi::*;
+    use crate::futaba_sbus::FutabaSbus;
+    use crate::sensor::*;
     use systick_monotonic::Systick;
     use super::*;
 
     #[shared]
     struct Shared{
         counter: u32,
+        sensor: Sensor,
     }
 
     #[local]
     struct Local{
         imu: Bmi088,
         int_acc: PC4<Input>,
+        sbus_reciver: FutabaSbus,
     }
 
     #[monotonic(binds = SysTick, default = true)]
@@ -68,40 +76,71 @@ mod app{
         let mono = Systick::new(cx.core.SYST, 48_000_000);
         keep_watch::spawn_after(Duration::<u64, 1, 1000>::from_ticks(1000)).unwrap();
         show_fps::spawn_after(Duration::<u64, 1, 1000>::from_ticks(1000)).unwrap();
+        get_rc_data::spawn_after(Duration::<u64, 1, 1000>::from_ticks(1000)).unwrap();
+
+
+        let rx_pin = gpioc.pc11.into_alternate();
+
+        let mut rx:Rx<USART3> = dp.USART3.rx(rx_pin, 100_000.bps(), &clocks).unwrap();
+
 
 
         (
             Shared{
                 counter: 0,
+                sensor: Sensor::new(),
             },
             Local{
                 int_acc,
                 imu,
+                sbus_reciver: FutabaSbus::new(rx, gpiob.pb8.into(), gpioa.pa8.into()),
             },
             init::Monotonics(mono),
         )
     }
 
-    #[task( local = [int_acc, imu], shared = [counter])]
+    #[task( local = [int_acc, imu], shared = [counter, sensor])]
     fn keep_watch(mut cx: keep_watch::Context) {
         cx.local.int_acc.clear_interrupt_pending_bit();
         let imu:&mut Bmi088 = cx.local.imu;
 
         imu.enable_acc().unwrap();
-        let mut send_msg: [u8; 8] = [0x12|0x80, 0x13|0x80, 0x14|0x80, 0x15|0x80, 0x16|0x80, 0x17|0x80, 0x55, 0x55];
-        let res = imu.spi.transfer(send_msg.as_mut_slice()).unwrap();
+
+        let mut raw_data: [u8; 6] = [0; 6];
+        imu.update().unwrap();
+
+        cx.shared.sensor.lock(|mut sensor| {
+            imu.decode(&mut sensor);
+        });
+
+        cx.shared.sensor.lock(|sensor|{sensor.attitude_solution(&0.005)});
+
         cx.shared.counter.lock(|counter| {
             *counter = *counter + 1;
         });
         imu.silence().unwrap();
-        keep_watch::spawn_after(Duration::<u64, 1, 1000>::from_ticks(5)).unwrap();
+
+        keep_watch::spawn_after(Duration::<u64, 1, 1000>::from_ticks(4)).unwrap();
     }
 
-    #[task(shared = [counter])]
+    #[task(shared = [counter, sensor])]
     fn show_fps(mut cx: show_fps::Context) {
-        defmt::println!("{}", cx.shared.counter.lock(|counter|{*counter}));
+        defmt::println!("FPS: {}", cx.shared.counter.lock(|counter|{*counter}));
+        // cx.shared.sensor.lock(|sensor| {
+        //    defmt::println!("YAW: {}", sensor.yaw);
+        //    defmt::println!("PITCH: {}", sensor.pitch);
+        //    defmt::println!("ROLL: {}", sensor.roll);
+        // });
         cx.shared.counter.lock(|counter|{*counter = 0});
+
         show_fps::spawn_after(Duration::<u64, 1, 1000>::from_ticks(1000)).unwrap();
     }
+
+    #[task(local = [sbus_reciver])]
+    fn get_rc_data(cx: get_rc_data::Context) {
+        // defmt::println!("{}", cx.local.sbus_reciver.rx.read().unwrap());
+        // get_rc_data::spawn_after(Duration::<u64, 1, 1000>::from_ticks(1000)).unwrap();
+    }
+
 }
 
