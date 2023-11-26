@@ -1,4 +1,2 @@
-# my_rs_fc
-a copter flight controller on Rust
-
-UNDER DEVELOPED
+# rs_bmi088
+A embedded Rust progrom, dirve BMI088 in SPI and UART output the solved attitude
